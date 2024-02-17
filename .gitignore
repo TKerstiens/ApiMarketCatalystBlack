@@ -1,0 +1,104 @@
+## .NET Core
+bin/
+obj/
+out/
+
+## ASP.NET Scaffolding
+ScaffoldingReadMe.txt
+
+## User-specific files
+*.rsuser
+*.user
+*.userosscache
+*.suo
+*.userprefs
+*.dbmdl
+*.dbproj.schemaview
+*.jfm
+*.tscache
+*.vspscc
+*.vssscc
+*.lsadump
+.vs/
+*.pidb
+*.svclog
+*.scc
+
+## Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+
+## NuGet Packages
+*.nupkg
+*.snupkg
+# The packages folder can be ignored because of Package Restore
+**/[Pp]ackages/*
+# except build/, which is used as an MSBuild target.
+!**/[Pp]ackages/build/
+# Uncomment if necessary however generally it will be regenerated when needed
+#!**/[Pp]ackages/repositories.config
+*.nuget.props
+*.nuget.targets
+
+## NuGet Symbol Packages
+*.snupkg
+
+## Maven Wrappers
+.mvn/wrapper/maven-wrapper.jar
+
+## Tooling
+.project
+*.launchsettings
+
+## Project Rider
+.idea/
+
+## User-specific files
+*.rsuser
+*.user
+*.userosscache
+*.suo
+*.userprefs
+*.dbmdl
+
+## Mono Auto Generated Files
+mono_crash.*
+
+## Windows image file caches
+Thumbs.db
+ehthumbs.db
+
+## Folder config file
+Desktop.ini
+
+## Recycle Bin used on file shares
+$RECYCLE.BIN/
+
+## VS Code directories
+.vscode/
+
+## Windows Installer files
+*.cab
+*.msi
+*.msm
+*.msp
+
+## Windows shortcuts
+*.lnk
+
+## JetBrains Rider
+.idea/
+*.sln.iml
+
+## End of .gitignore
