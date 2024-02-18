@@ -5,10 +5,16 @@ using System.Collections.Generic;
 [ApiController]
 public class UserController : ControllerBase
 {
+    private readonly PlatformService _platformService;
     private static List<User> users = new List<User>
     {
         new User { ID = 1, Username = "Jimmy", Password = "Nuetron" },
     };
+
+    public UserController(PlatformService platformService)
+    {
+        _platformService = platformService;
+    }
 
     // GET: api/users
     [HttpGet]
@@ -17,11 +23,64 @@ public class UserController : ControllerBase
         return users;
     }
 
-    // POST: api/users
+    // POST: /user
     [HttpPost]
-    public ActionResult<User> CreateUser(User user)
+    public async Task<ActionResult<UserDTO>> CreateUser(User user)
     {
-        users.Add(user);
-        return CreatedAtAction(nameof(CreateUser), new { id = user.ID }, user);
+        if(string.IsNullOrEmpty(user.Username))
+        {
+            var errorResponse = new { error = "Username not present." };
+            return BadRequest(errorResponse);
+        }
+
+        if(string.IsNullOrEmpty(user.Password) || string.IsNullOrEmpty(user.ConfirmP))
+        {
+            var errorResponse = new { error = "Password not present." };
+            return BadRequest(errorResponse);
+        }
+
+        if(user.Password != user.ConfirmP)
+        {
+            var errorResponse = new { error = "Password confirmation does not match." };
+            return BadRequest(errorResponse);
+        }
+
+        UserResult result = await _platformService.AddUser(user);
+
+        if(!result.Success)
+        {
+            var errorResponse = new { error = result.ErrorMessage };
+            return BadRequest(errorResponse);
+        }
+
+        return CreatedAtAction(null, null, UserDTO.FromUser(user));
+    }
+
+    // POST: /user/auth
+    [Route("auth")]
+    [HttpPost]
+    public async Task<ActionResult<UserDTO>> AuthUser(User user)
+    {
+        if(string.IsNullOrEmpty(user.Username))
+        {
+            var errorResponse = new { error = "Username not present." };
+            return Unauthorized(errorResponse);
+        }
+
+        if(string.IsNullOrEmpty(user.Password))
+        {
+            var errorResponse = new { error = "Password not present." };
+            return Unauthorized(errorResponse);
+        }
+
+        UserResult result = await _platformService.AuthUser(user);
+
+        if(!result.Success)
+        {
+            var errorResponse = new { error = "Unable to authenticate credentials." };
+            return Unauthorized(errorResponse);
+        }
+
+        return Ok(UserDTO.FromUser(result.User!));
     }
 }
