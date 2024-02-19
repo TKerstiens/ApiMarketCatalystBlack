@@ -6,16 +6,20 @@ using MySqlConnector;
 using System.IdentityModel.Tokens.Jwt;
 using Microsoft.IdentityModel.Tokens;
 using System.Security.Claims;
+using Microsoft.Extensions.Options;
 
 public class PlatformService
 {
     private readonly ILogger<PlatformService> _logger;
+    private readonly JWTSettings _jwtSettings;
+
     private readonly string _connectionString;
     private readonly string _salt;
 
-    public PlatformService(ILogger<PlatformService> logger)
+    public PlatformService(ILogger<PlatformService> logger, IOptions<JWTSettings> jwtSettings)
     {
         _logger = logger;
+        _jwtSettings = jwtSettings.Value;
 
         string? salt = Environment.GetEnvironmentVariable("APPLICATION_SALT");
         string? host = Environment.GetEnvironmentVariable("DB_HOST");
@@ -126,14 +130,14 @@ public class PlatformService
     public async Task<string> CreateAndStoreToken(User user)
     {
         // Check for null environment variables
-        string? jwtKey = Environment.GetEnvironmentVariable("JWT_KEY");
-        string? jwtIssuer = Environment.GetEnvironmentVariable("JWT_ISSUER");
-        string? jwtAudience = Environment.GetEnvironmentVariable("JWT_AUDIENCE");
+        string? jwtKey = _jwtSettings.Secret;
+        string? jwtIssuer = _jwtSettings.ValidIssuer;
+        string? jwtAudience = _jwtSettings.ValidAudience;
 
         if (string.IsNullOrEmpty(jwtKey) || string.IsNullOrEmpty(jwtIssuer) || string.IsNullOrEmpty(jwtAudience))
         {
-            _logger.LogError("One or more JWT configuration environment variables are not set. Application will not proceed.");
-            throw new InvalidOperationException("JWT configuration environment variables are missing. JWT_KEY, JWT_ISSUER, JWT_AUDIENCE");
+            _logger.LogError("One or more JWT configuration variables are not set. Application will not proceed.");
+            throw new InvalidOperationException("JWT configuration variables are missing. Check appsettings for JWTSettings.");
         }
 
         if(user.ID == null)
@@ -142,35 +146,42 @@ public class PlatformService
         }
 
         // Generate JWT
-        var tokenHandler = new JwtSecurityTokenHandler();
-        var key = Encoding.ASCII.GetBytes(jwtKey);
-        var tokenDescriptor = new SecurityTokenDescriptor
+        DateTime tokenExpires = DateTime.UtcNow.AddDays(1);
+
+        List<Claim> claims = new List<Claim>();
+        claims.Add(new Claim(ClaimTypes.NameIdentifier, user.ID.ToString()!)); // Null Check Above
+        claims.Add(new Claim(ClaimTypes.Role, "DataConsumer"));
+        if(user.Username != null && user.Username == "tkerstiens") 
         {
-            Subject = new ClaimsIdentity(new Claim[] 
-            {
-                new Claim(ClaimTypes.NameIdentifier, user.ID.ToString()!) // Null check above
-            }),
-            Expires = DateTime.UtcNow.AddDays(1),
+            claims.Add(new Claim(ClaimTypes.Role, "Admin"));
+        }
+
+        JwtSecurityTokenHandler tokenHandler = new JwtSecurityTokenHandler();
+        byte[] key = Encoding.ASCII.GetBytes(jwtKey);
+        SecurityTokenDescriptor tokenDescriptor = new SecurityTokenDescriptor
+        {
+            Subject = new ClaimsIdentity(claims),
+            Expires = tokenExpires,
             SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature),
             Issuer = jwtIssuer,
             Audience = jwtAudience
         };
 
-        var token = tokenHandler.CreateToken(tokenDescriptor);
-        var jwtString = tokenHandler.WriteToken(token);
+        JwtSecurityToken? token = tokenHandler.CreateToken(tokenDescriptor) as JwtSecurityToken;
+        string jwtString = tokenHandler.WriteToken(token);
 
         // Insert JWT into database
         try
         {
-            using (var connection = new MySqlConnection(_connectionString))
+            using (MySqlConnection connection = new MySqlConnection(_connectionString))
             {
                 await connection.OpenAsync();
-                using (var command = new MySqlCommand("INSERT INTO `Tokens` (`UserID`, `Token`, `CreatedTime`, `ExpiresTime`, `IsCanceled`) VALUES (@UserID, @Token, @CreatedTime, @ExpiresTime, @IsCanceled)", connection))
+                using (MySqlCommand command = new MySqlCommand("INSERT INTO `Tokens` (`UserID`, `Token`, `CreatedTime`, `ExpiresTime`, `IsCanceled`) VALUES (@UserID, @Token, @CreatedTime, @ExpiresTime, @IsCanceled)", connection))
                 {
                     command.Parameters.AddWithValue("@UserID", user.ID);
                     command.Parameters.AddWithValue("@Token", jwtString);
-                    command.Parameters.AddWithValue("@CreatedTime", DateTime.UtcNow);
-                    command.Parameters.AddWithValue("@ExpiresTime", DateTime.UtcNow.AddDays(1));
+                    command.Parameters.AddWithValue("@CreatedTime", tokenExpires.AddDays(-1));
+                    command.Parameters.AddWithValue("@ExpiresTime", tokenExpires);
                     command.Parameters.AddWithValue("@IsCanceled", false);
 
                     await command.ExecuteNonQueryAsync();

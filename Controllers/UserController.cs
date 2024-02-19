@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using System.Collections.Generic;
+using Microsoft.AspNetCore.Authorization;
 
 [Route("[controller]")]
 [ApiController]
@@ -83,4 +84,27 @@ public class UserController : ControllerBase
 
         return Ok(UserDTO.FromUser(result.User!));
     }
+
+    // GET: /user/auth/check/Admin
+    [Route("auth/check/Admin")]
+    [Authorize(Roles = "Admin")]
+    [HttpGet]
+    public ActionResult<AuthCheckResponse> CheckAdmin()
+    {
+        return new AuthCheckResponse();
+    }
+
+    // GET: /user/auth/check/DataConsumer
+    [Route("auth/check/DataConsumer")]
+    [Authorize(Roles = "DataConsumer")]
+    [HttpGet]
+    public ActionResult<AuthCheckResponse> CheckDataConsumer()
+    {
+        return new AuthCheckResponse();
+    }
+}
+
+public class AuthCheckResponse
+{
+    public bool IsAuthorized { get; set; } = true;
 }
