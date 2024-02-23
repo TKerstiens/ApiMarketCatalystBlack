@@ -1,26 +1,10 @@
-public class User
-{
-    public int? ID { get; set; }
-    public string? Token { get; set; }
-    public string? Username { get; set; }
-    public string? Password { get; set; }
-    public string? ConfirmP { get; set; }
-}
+namespace ApiMarketCatalystBlack.Models;
 
-public class UserDTO
+public sealed class User
 {
-    public int? ID { get; set; }
-    public string? Token { get; set; }
-    public string? Username { get; set; }
-
-    // In your service or controller, map your domain model to the DTO
-    public static UserDTO FromUser(User user)
-    {
-        return new UserDTO
-        {
-            ID = user.ID,
-            Username = user.Username,
-            Token = user.Token
-        };
-    }
+	internal int? Id { get; set; }
+	internal string? Token { get; set; }
+	internal string? Username { get; init; }
+	internal string? Password { get; init; }
+	public string? ConfirmP { get; set; }
 }

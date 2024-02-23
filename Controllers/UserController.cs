@@ -1,110 +1,70 @@
-using Microsoft.AspNetCore.Mvc;
-using System.Collections.Generic;
+using ApiMarketCatalystBlack.Models;
+using ApiMarketCatalystBlack.Services;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Mvc;
+
+namespace ApiMarketCatalystBlack.Controllers;
 
 [Route("[controller]")]
 [ApiController]
-public class UserController : ControllerBase
+public class UserController(PlatformService platformService) : ControllerBase
 {
-    private readonly PlatformService _platformService;
-    private static List<User> users = new List<User>
-    {
-        new User { ID = 1, Username = "Jimmy", Password = "Nuetron" },
-    };
+	private static readonly List<User> Users =
+	[
+		new User { Id = 1, Username = "Jimmy", Password = "Neutron" }
+	];
 
-    public UserController(PlatformService platformService)
-    {
-        _platformService = platformService;
-    }
+	// GET: api/users
+	[HttpGet]
+	public ActionResult<IEnumerable<User>> GetProducts()
+		=> Users;
 
-    // GET: api/users
-    [HttpGet]
-    public ActionResult<IEnumerable<User>> GetProducts()
-    {
-        return users;
-    }
+	// POST: /user
+	[HttpPost]
+	public async Task<ActionResult<UserDto>> CreateUser(User user)
+	{
+		if (string.IsNullOrEmpty(user.Username))
+			return BadRequest(new { error = "Username not present." });
 
-    // POST: /user
-    [HttpPost]
-    public async Task<ActionResult<UserDTO>> CreateUser(User user)
-    {
-        if(string.IsNullOrEmpty(user.Username))
-        {
-            var errorResponse = new { error = "Username not present." };
-            return BadRequest(errorResponse);
-        }
+		if (string.IsNullOrEmpty(user.Password) || string.IsNullOrEmpty(user.ConfirmP))
+			return BadRequest(new { error = "Password not present." });
 
-        if(string.IsNullOrEmpty(user.Password) || string.IsNullOrEmpty(user.ConfirmP))
-        {
-            var errorResponse = new { error = "Password not present." };
-            return BadRequest(errorResponse);
-        }
+		if (user.Password != user.ConfirmP)
+			return BadRequest(new { error = "Password confirmation does not match." });
 
-        if(user.Password != user.ConfirmP)
-        {
-            var errorResponse = new { error = "Password confirmation does not match." };
-            return BadRequest(errorResponse);
-        }
+		var result = await platformService.AddUser(user);
 
-        UserResult result = await _platformService.AddUser(user);
+		if (result.Success)
+			return CreatedAtAction(null, null, UserDto.FromUser(user));
 
-        if(!result.Success)
-        {
-            var errorResponse = new { error = result.ErrorMessage };
-            return BadRequest(errorResponse);
-        }
+		return BadRequest(new { error = result.ErrorMessage });
+	}
 
-        return CreatedAtAction(null, null, UserDTO.FromUser(user));
-    }
+	// POST: /user/auth
+	[Route("auth")]
+	[HttpPost]
+	public async Task<ActionResult<UserDto>> AuthUser(User user)
+	{
+		if (string.IsNullOrEmpty(user.Username) || string.IsNullOrEmpty(user.Password))
+			return Unauthorized(new { error = "Unable to authenticate credentials." });
 
-    // POST: /user/auth
-    [Route("auth")]
-    [HttpPost]
-    public async Task<ActionResult<UserDTO>> AuthUser(User user)
-    {
-        if(string.IsNullOrEmpty(user.Username))
-        {
-            var errorResponse = new { error = "Username not present." };
-            return Unauthorized(errorResponse);
-        }
+		var result = await platformService.AuthUser(user);
+		return result is { Success: true, User: not null }
+				   ? Ok(UserDto.FromUser(result.User))
+				   : Unauthorized(new { error = "Unable to authenticate credentials." });
+	}
 
-        if(string.IsNullOrEmpty(user.Password))
-        {
-            var errorResponse = new { error = "Password not present." };
-            return Unauthorized(errorResponse);
-        }
+	// GET: /user/auth/check/Admin
+	[Route("auth/check/Admin")]
+	[Authorize(Roles = "Admin")]
+	[HttpGet]
+	public ActionResult<AuthCheckResponse> CheckAdmin()
+		=> new AuthCheckResponse();
 
-        UserResult result = await _platformService.AuthUser(user);
-
-        if(!result.Success)
-        {
-            var errorResponse = new { error = "Unable to authenticate credentials." };
-            return Unauthorized(errorResponse);
-        }
-
-        return Ok(UserDTO.FromUser(result.User!));
-    }
-
-    // GET: /user/auth/check/Admin
-    [Route("auth/check/Admin")]
-    [Authorize(Roles = "Admin")]
-    [HttpGet]
-    public ActionResult<AuthCheckResponse> CheckAdmin()
-    {
-        return new AuthCheckResponse();
-    }
-
-    // GET: /user/auth/check/DataConsumer
-    [Route("auth/check/DataConsumer")]
-    [Authorize(Roles = "DataConsumer")]
-    [HttpGet]
-    public ActionResult<AuthCheckResponse> CheckDataConsumer()
-    {
-        return new AuthCheckResponse();
-    }
-}
-
-public class AuthCheckResponse
-{
-    public bool IsAuthorized { get; set; } = true;
+	// GET: /user/auth/check/DataConsumer
+	[Route("auth/check/DataConsumer")]
+	[Authorize(Roles = "DataConsumer")]
+	[HttpGet]
+	public ActionResult<AuthCheckResponse> CheckDataConsumer()
+		=> new AuthCheckResponse();
 }

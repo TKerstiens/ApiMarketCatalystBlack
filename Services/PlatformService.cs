@@ -1,261 +1,191 @@
+using System.IdentityModel.Tokens.Jwt;
+using System.Security.Claims;
 using System.Security.Cryptography;
 using System.Text;
-using System.Threading.Tasks;
-using Microsoft.Extensions.Configuration;
-using MySqlConnector;
-using System.IdentityModel.Tokens.Jwt;
-using Microsoft.IdentityModel.Tokens;
-using System.Security.Claims;
+using ApiMarketCatalystBlack.GeneralDefinitions;
+using ApiMarketCatalystBlack.Models;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.Tokens;
+using MySqlConnector;
 
-public class PlatformService
+namespace ApiMarketCatalystBlack.Services;
+
+public sealed class PlatformService
 {
-    private readonly ILogger<PlatformService> _logger;
-    private readonly JWTSettings _jwtSettings;
+	private readonly ILogger<PlatformService> _logger;
+	private readonly JwtSettings _jwtSettings;
 
-    private readonly string _connectionString;
-    private readonly string _salt;
+	private readonly string _connectionString;
+	private readonly string _salt = string.Empty;
 
-    public PlatformService(ILogger<PlatformService> logger, IOptions<JWTSettings> jwtSettings)
-    {
-        _logger = logger;
-        _jwtSettings = jwtSettings.Value;
+	public PlatformService(ILogger<PlatformService> logger, IOptions<JwtSettings> jwtSettings)
+	{
+		_logger = logger;
+		_jwtSettings = jwtSettings.Value;
 
-        string? salt = Environment.GetEnvironmentVariable("APPLICATION_SALT");
-        string? host = Environment.GetEnvironmentVariable("DB_HOST");
-        string? port = Environment.GetEnvironmentVariable("DB_PORT");
-        string? dbName = Environment.GetEnvironmentVariable("DB_NAME");
-        string? user = Environment.GetEnvironmentVariable("DB_USER");
-        string? password = Environment.GetEnvironmentVariable("DB_PASSWORD");
+		var isValidConfiguration = UtilityService.GetEnvironmentVariable("APPLICATION_SALT", out var salt);
+		if (salt is not null) _salt = salt;
 
-        bool exiting = false;
+		isValidConfiguration &= UtilityService.GetEnvironmentVariable("DB_HOST", out var host);
+		isValidConfiguration &= UtilityService.GetEnvironmentVariable("DB_PORT", out var port);
+		isValidConfiguration &= UtilityService.GetEnvironmentVariable("DB_NAME", out var dbName);
+		isValidConfiguration &= UtilityService.GetEnvironmentVariable("DB_USER", out var user);
+		isValidConfiguration &= UtilityService.GetEnvironmentVariable("DB_PASSWORD", out var password);
 
-        if(salt == null) {
-            Console.Error.WriteLine("APPLICATION_SALT environment variable is not set. Application will terminate.");
-            exiting = true;
-        }
+		if (!isValidConfiguration)
+			throw new InvalidOperationException("Environment not properly configured.");
 
-        if(host == null) {
-            Console.Error.WriteLine("DB_HOST environment variable is not set. Application will terminate.");
-            exiting = true;
-        }
+		_connectionString = $"server={host};port={port};database={dbName};user={user};password={password}";
+	}
 
-        if(port == null) {
-            Console.Error.WriteLine("DB_PORT environment variable is not set. Application will terminate.");
-            exiting = true;
-        }
+	private byte[] HashPassword(string password)
+	{
+		password = _salt + password;
+		var hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(password));
+		return hashBytes;
+	}
 
-        if(dbName == null) {
-            Console.Error.WriteLine("DB_NAME environment variable is not set. Application will terminate.");
-            exiting = true;
-        }
+	internal async Task<UserResult> AddUser(User newUser)
+	{
+		// Check for missing username or password
+		if (string.IsNullOrEmpty(newUser.Username) || string.IsNullOrEmpty(newUser.Password))
+			return new (null, "Username or password are missing.");
 
-        if(user == null) {
-            Console.Error.WriteLine("DB_USER environment variable is not set. Application will terminate.");
-            exiting = true;
-        }
+		try
+		{
+			await using var connection = new MySqlConnection(_connectionString);
+			await connection.OpenAsync();
 
-        if(password == null) {
-            Console.Error.WriteLine("DB_PASSWORD environment variable is not set. Application will terminate.");
-            exiting = true;
-        }
+			// Check if user already exists
+			await using var checkCmd = new MySqlCommand("SELECT COUNT(*) FROM `Users` WHERE `Username` = @Username", connection);
+			checkCmd.Parameters.AddWithValue("@Username", newUser.Username);
+			var result = await checkCmd.ExecuteScalarAsync();
+			if (result == null) return new (null, "Unknown error, NTZ9U2H5");
+			var exists = Convert.ToInt32(result);
+			if (exists > 0)
+				return new (null, "User already exists.");
 
-        if(exiting)
-        {
-            throw new InvalidOperationException("Environment not properly configured.");
-        }
+			var hashedPassword = HashPassword(newUser.Password);
 
-        _salt = salt!; // Null Check Above
-        _connectionString = $"server={host};port={port};database={dbName};user={user};password={password}";
-    }
+			await using MySqlCommand command = new MySqlCommand("INSERT INTO `Users` (`Username`, `Password`) VALUES (@Username, @Password);", connection);
+			command.Parameters.AddWithValue("@Username", newUser.Username);
+			command.Parameters.AddWithValue("@Password", hashedPassword);
 
-    public byte[] HashPassword(string password)
-    {
-        password = _salt + password;
-        using (SHA256 sha256 = SHA256.Create())
-        {
-            byte[] hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(password));
-            return hashBytes;
-        }
-    }
+			await command.ExecuteNonQueryAsync();
+			newUser.Id = Convert.ToInt32(command.LastInsertedId);
 
-    public async Task<UserResult> AddUser(User newUser)
-    {
-        // Check for missing username or password
-        if (string.IsNullOrEmpty(newUser.Username) || string.IsNullOrEmpty(newUser.Password))
-        {
-            return new UserResult(null, "Username or password are missing.");
-        }
+			return new (newUser, "");
+		}
+		catch (Exception ex)
+		{
+			_logger.LogError(ex, "An error occurred while adding the user.");
+			return new (null, "An error occurred while adding the user. Exception logged on server.");
+		}
+	}
 
-        try
-        {
-            using (MySqlConnection connection = new MySqlConnection(_connectionString))
-            {
-                await connection.OpenAsync();
+	private async Task<string> CreateAndStoreToken(User user)
+	{
+		// Check for null environment variables
+		var jwtKey = _jwtSettings.Secret;
+		var jwtIssuer = _jwtSettings.ValidIssuer;
+		var jwtAudience = _jwtSettings.ValidAudience;
 
-                // Check if user already exists
-                using (MySqlCommand checkCmd = new MySqlCommand("SELECT COUNT(*) FROM `Users` WHERE `Username` = @Username", connection))
-                {
-                    checkCmd.Parameters.AddWithValue("@Username", newUser.Username);
-                    object? result = await checkCmd.ExecuteScalarAsync();
-                    if(result == null) return new UserResult(null, "Unknown error, NTZ9U2H5");
-                    int exists = Convert.ToInt32(result);
-                    if (exists > 0)
-                    {
-                        return new UserResult(null, "User already exists.");
-                    }
-                }
+		if (string.IsNullOrEmpty(jwtKey) || string.IsNullOrEmpty(jwtIssuer) || string.IsNullOrEmpty(jwtAudience))
+		{
+			_logger.LogError("One or more JWT configuration variables are not set. Application will not proceed.");
+			throw new InvalidOperationException("JWT configuration variables are missing. Check appsettings for JWTSettings.");
+		}
 
-                byte[] hashedPassword = HashPassword(newUser.Password);
+		if (user.Id == null)
+			throw new InvalidOperationException("No User ID provided.");
 
-                using (MySqlCommand command = new MySqlCommand("INSERT INTO `Users` (`Username`, `Password`) VALUES (@Username, @Password);", connection))
-                {
-                    command.Parameters.AddWithValue("@Username", newUser.Username);
-                    command.Parameters.AddWithValue("@Password", hashedPassword);
+		// Generate JWT
+		var tokenExpires = DateTime.UtcNow.AddDays(1);
 
-                    await command.ExecuteNonQueryAsync();
-                    newUser.ID = Convert.ToInt32(command.LastInsertedId);
-                }
-            }
+		var claims = new List<Claim>
+					 {
+						 new Claim(type: ClaimTypes.NameIdentifier, value: user.Id.ToString() ?? string.Empty), // Null Check Above
+						 new Claim(ClaimTypes.Role, "DataConsumer")
+					 };
+		if (user.Username is "tkerstiens")
+			claims.Add(new Claim(ClaimTypes.Role, "Admin"));
 
-            return new UserResult(newUser, "");
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "An error occurred while adding the user.");
-            return new UserResult(null, "An error occurred while adding the user. Exception logged on server.");
-        }
-    }
+		var tokenHandler = new JwtSecurityTokenHandler();
+		var key = Encoding.ASCII.GetBytes(jwtKey);
+		var tokenDescriptor = new SecurityTokenDescriptor
+							  {
+								  Subject = new (claims),
+								  Expires = tokenExpires,
+								  SigningCredentials = new (new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature),
+								  Issuer = jwtIssuer,
+								  Audience = jwtAudience
+							  };
 
-    public async Task<string> CreateAndStoreToken(User user)
-    {
-        // Check for null environment variables
-        string? jwtKey = _jwtSettings.Secret;
-        string? jwtIssuer = _jwtSettings.ValidIssuer;
-        string? jwtAudience = _jwtSettings.ValidAudience;
+		var token = tokenHandler.CreateToken(tokenDescriptor) as JwtSecurityToken;
+		var jwtString = tokenHandler.WriteToken(token);
 
-        if (string.IsNullOrEmpty(jwtKey) || string.IsNullOrEmpty(jwtIssuer) || string.IsNullOrEmpty(jwtAudience))
-        {
-            _logger.LogError("One or more JWT configuration variables are not set. Application will not proceed.");
-            throw new InvalidOperationException("JWT configuration variables are missing. Check appsettings for JWTSettings.");
-        }
+		// Insert JWT into database
+		try
+		{
+			await using var connection = new MySqlConnection(_connectionString);
+			await connection.OpenAsync();
+			await using var command =
+				new
+					MySqlCommand("INSERT INTO `Tokens` (`UserID`, `Token`, `CreatedTime`, `ExpiresTime`, `IsCanceled`) VALUES (@UserID, @Token, @CreatedTime, @ExpiresTime, @IsCanceled)",
+								 connection);
+			command.Parameters.AddWithValue("@UserID", user.Id);
+			command.Parameters.AddWithValue("@Token", jwtString);
+			command.Parameters.AddWithValue("@CreatedTime", tokenExpires.AddDays(-1));
+			command.Parameters.AddWithValue("@ExpiresTime", tokenExpires);
+			command.Parameters.AddWithValue("@IsCanceled", false);
 
-        if(user.ID == null)
-        {
-            throw new InvalidOperationException("No User ID provided.");
-        }
+			await command.ExecuteNonQueryAsync();
+		}
+		catch (Exception ex)
+		{
+			_logger.LogError(ex, "An error occurred while inserting the JWT into the database.");
+			throw; // Propagate the exception to handle it according to your application's error handling policy
+		}
 
-        // Generate JWT
-        DateTime tokenExpires = DateTime.UtcNow.AddDays(1);
+		return jwtString;
+	}
 
-        List<Claim> claims = new List<Claim>();
-        claims.Add(new Claim(ClaimTypes.NameIdentifier, user.ID.ToString()!)); // Null Check Above
-        claims.Add(new Claim(ClaimTypes.Role, "DataConsumer"));
-        if(user.Username != null && user.Username == "tkerstiens") 
-        {
-            claims.Add(new Claim(ClaimTypes.Role, "Admin"));
-        }
+	internal async Task<UserResult> AuthUser(User user)
+	{
+		if (string.IsNullOrEmpty(user.Username) || string.IsNullOrEmpty(user.Password))
+			return new UserResult(null, "No Username or Password.");
 
-        JwtSecurityTokenHandler tokenHandler = new JwtSecurityTokenHandler();
-        byte[] key = Encoding.ASCII.GetBytes(jwtKey);
-        SecurityTokenDescriptor tokenDescriptor = new SecurityTokenDescriptor
-        {
-            Subject = new ClaimsIdentity(claims),
-            Expires = tokenExpires,
-            SigningCredentials = new SigningCredentials(new SymmetricSecurityKey(key), SecurityAlgorithms.HmacSha256Signature),
-            Issuer = jwtIssuer,
-            Audience = jwtAudience
-        };
+		try
+		{
+			await using var connection = new MySqlConnection(_connectionString);
+			await connection.OpenAsync();
 
-        JwtSecurityToken? token = tokenHandler.CreateToken(tokenDescriptor) as JwtSecurityToken;
-        string jwtString = tokenHandler.WriteToken(token);
+			// Hash the provided password
+			var hashedPassword = HashPassword(user.Password);
 
-        // Insert JWT into database
-        try
-        {
-            using (MySqlConnection connection = new MySqlConnection(_connectionString))
-            {
-                await connection.OpenAsync();
-                using (MySqlCommand command = new MySqlCommand("INSERT INTO `Tokens` (`UserID`, `Token`, `CreatedTime`, `ExpiresTime`, `IsCanceled`) VALUES (@UserID, @Token, @CreatedTime, @ExpiresTime, @IsCanceled)", connection))
-                {
-                    command.Parameters.AddWithValue("@UserID", user.ID);
-                    command.Parameters.AddWithValue("@Token", jwtString);
-                    command.Parameters.AddWithValue("@CreatedTime", tokenExpires.AddDays(-1));
-                    command.Parameters.AddWithValue("@ExpiresTime", tokenExpires);
-                    command.Parameters.AddWithValue("@IsCanceled", false);
+			// Prepare the query to search for the username with the hashed password and retrieve the user's ID
+			const string query = "SELECT `ID` FROM `Users` WHERE `Username` = @Username AND `Password` = @Password";
 
-                    await command.ExecuteNonQueryAsync();
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "An error occurred while inserting the JWT into the database.");
-            throw; // Propagate the exception to handle it according to your application's error handling policy
-        }
+			await using var command = new MySqlCommand(query, connection);
+			command.Parameters.AddWithValue("@Username", user.Username);
+			command.Parameters.AddWithValue("@Password", hashedPassword);
 
-        return jwtString;
-    }
+			// Execute the query and try to retrieve the user's ID
+			var result = await command.ExecuteScalarAsync();
+			if (result == null) return new (null, "Unknown error, N43SS834");
 
-    public async Task<UserResult> AuthUser(User user)
-    {
-        if (string.IsNullOrEmpty(user.Username) || string.IsNullOrEmpty(user.Password))
-        {
-            return new UserResult(null, "No Username or Password.");
-        }
+			// Attach the retrieved ID to the user object
+			user.Id = Convert.ToInt32(result);
+			// Assuming CreateAndStoreToken generates a JWT for the user and stores it in the database
+			user.Token = await CreateAndStoreToken(user);
+			return new UserResult(user);
+		}
+		catch (Exception ex)
+		{
+			_logger.LogError(ex, "An error occurred while authenticating the user.");
+		}
 
-        try
-        {
-            using (MySqlConnection connection = new MySqlConnection(_connectionString))
-            {
-                await connection.OpenAsync();
-
-                // Hash the provided password
-                byte[] hashedPassword = HashPassword(user.Password);
-
-                // Prepare the query to search for the username with the hashed password and retrieve the user's ID
-                string query = "SELECT `ID` FROM `Users` WHERE `Username` = @Username AND `Password` = @Password";
-
-                using (MySqlCommand command = new MySqlCommand(query, connection))
-                {
-                    command.Parameters.AddWithValue("@Username", user.Username);
-                    command.Parameters.AddWithValue("@Password", hashedPassword);
-
-                    // Execute the query and try to retrieve the user's ID
-                    object? result = await command.ExecuteScalarAsync();
-                    if(result == null) return new UserResult(null, "Unknown error, N43SS834");
-
-                    if (result != null)
-                    {
-                        // Attach the retrieved ID to the user object
-                        user.ID = Convert.ToInt32(result);
-                        // Assuming CreateAndStoreToken generates a JWT for the user and stores it in the database
-                        user.Token = await CreateAndStoreToken(user);
-                        return new UserResult(user);
-                    }
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "An error occurred while authenticating the user.");
-        }
-
-        // Return an error if an exception occurs or if no user is found
-        return new UserResult(null, "Unable to authenticate user credentials.");
-    }
-}
-
-public class UserResult
-{
-    public User? User { get; private set; }
-    public string ErrorMessage { get; private set; }
-    public bool Success { get; private set; }
-
-    public UserResult(User? user, string errorMessage = "")
-    {
-        User = user;
-        ErrorMessage = errorMessage;
-        Success = string.IsNullOrEmpty(ErrorMessage);
-    }
+		// Return an error if an exception occurs or if no user is found
+		return new (null, "Unable to authenticate user credentials.");
+	}
 }
