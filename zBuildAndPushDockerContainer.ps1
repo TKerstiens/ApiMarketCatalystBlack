@@ -23,5 +23,4 @@ docker tag api-market-catalyst-black:latest $ecrRepoUrl/api-market-catalyst-blac
 # Push the Docker image to ECR
 docker push $ecrRepoUrl/api-market-catalyst-black:latest
 
-
 }
