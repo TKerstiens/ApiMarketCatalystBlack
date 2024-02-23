@@ -1,0 +1,20 @@
+# Ignore Terraform plan files
+*.tfplan
+
+# Ignore Terraform state files
+*.tfstate
+*.tfstate.*
+
+# Ignore Terraform lock files
+.terraform.lock.hcl
+
+# Ignore Terraform module directories
+.terraform/
+
+# Ignore override files as they are usually used for local development
+*_override.tf
+*_override.tf.json
+
+# Ignore CLI configuration files
+.terraformrc
+terraform.rc
